@@ -15,6 +15,7 @@ from uio import BytesIO
 from sffile import SizerFile
 from sram2 import psbt_tmp256
 from multisig import MultisigWallet, MAX_SIGNERS, disassemble_multisig, disassemble_multisig_mn
+from opcodes import OP_CHECKSIG, OP_DROP, OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY
 
 from public_constants import (
     PSBT_GLOBAL_UNSIGNED_TX, PSBT_GLOBAL_XPUB, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_WITNESS_UTXO,
@@ -673,7 +674,6 @@ class psbtInputProxy(psbtProxy):
                             which_key = set()
 
                         which_key.add(pubkey)
-
             if not addr_is_segwit and \
                     len(redeem_script) == 22 and \
                     redeem_script[0] == 0 and redeem_script[1] == 20:
@@ -681,6 +681,14 @@ class psbtInputProxy(psbtProxy):
                 addr_type = 'p2wpkh-p2sh'
                 addr = redeem_script[2:22]
                 self.is_segwit = True
+            elif redeem_script[-1] == OP_CHECKSIG and \
+                 redeem_script[-36] == OP_DROP and \
+                 redeem_script[-37] in (OP_CHECKSEQUENCEVERIFY, OP_CHECKLOCKTIMEVERIFY):
+                # single-sig timelock in a p2wsh/p2sh
+                self.is_multisig = False
+                addr = redeem_script[-35:-1]
+                if self.witness_script:
+                    self.is_segwit = True
             else:
                 # multiple keys involved, we probably can't do the finalize step
                 self.is_multisig = True

@@ -10,7 +10,7 @@ from ux import ux_show_story, ux_confirm, ux_dramatic_pause, ux_clear_keys
 from files import CardSlot, CardMissingError
 from public_constants import AF_P2SH, AF_P2WSH_P2SH, AF_P2WSH, AFC_SCRIPT, MAX_PATH_DEPTH
 from menu import MenuSystem, MenuItem
-from opcodes import OP_CHECKMULTISIG
+from opcodes import OP_CHECKMULTISIG, OP_CHECKSEQUENCEVERIFY, OP_CHECKLOCKTIMEVERIFY, OP_DROP
 from actions import needs_microsd
 
 # Bitcoin limitation: max number of signatures in CHECK_MULTISIG
@@ -31,8 +31,8 @@ def disassemble_multisig_mn(redeem_script):
     assert MAX_SIGNERS == 15
     assert redeem_script[-1] == OP_CHECKMULTISIG, 'need CHECKMULTISIG'
 
-    M = redeem_script[0] - 80
     N = redeem_script[-2] - 80
+    M = redeem_script[-34*N-3] - 80
 
     return M, N
 
@@ -46,18 +46,33 @@ def disassemble_multisig(redeem_script):
 
     M, N = disassemble_multisig_mn(redeem_script)
     assert 1 <= M <= N <= MAX_SIGNERS, 'M/N range'
-    assert len(redeem_script) == 1 + (N * 34) + 1 + 1, 'bad len'
+    assert len(redeem_script) >= 1 + (N * 34) + 1 + 1, 'bad len'
 
     # generator function
     dis = disassemble(redeem_script)
 
-    # expect M value first
-    ex_M, opcode =  next(dis)
-    assert ex_M == M and opcode == None, 'bad M'
+    # find M value
+    data_1, opcode_1 = next(dis)
+    data_2, opcode_2 = next(dis)
+    assert opcode_2 in (OP_CHECKSEQUENCEVERIFY, OP_CHECKLOCKTIMEVERIFY) or data_1 == M, 'not a multisig or bad M'
+    if opcode_2 in (OP_CHECKSEQUENCEVERIFY, OP_CHECKLOCKTIMEVERIFY):
+        assert data_2 is None, 'not a timelock multisig'
+        # next code should be OP_DROP
+        data, opcode = next(dis)
+        assert data is None and opcode == OP_DROP, 'expected OP_DROP'
+        ex_M, opcode = next(dis)
+        assert ex_M == M and opcode is None, 'bad M'
+        pubkeys = []
+        indices = range(N)
+    else:
+        assert opcode_1 is None, 'bad multisig'
+        assert opcode_2 is None and len(data_2) == 33, 'data'
+        assert data_2[0] == 0x02 or data_2[0] == 0x03, 'Y val'
+        pubkeys = [data_2]
+        indices = range(1, N)
 
     # need N pubkeys
-    pubkeys = []
-    for idx in range(N):
+    for idx in indices:
         data, opcode = next(dis)
         assert opcode == None and len(data) == 33, 'data'
         assert data[0] == 0x02 or data[0] == 0x03, 'Y val'
